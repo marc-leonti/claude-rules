@@ -1,0 +1,43 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code when working with code in this repository.
+
+## Read this first when starting a session
+
+**Cross-project durable rules.** Read [Marc's claude-rules repo](https://github.com/marc-leonti/claude-rules) at the start of every session in this repo. Two files are the priority:
+
+- `claude_user_rules.md` — the short durable behavioral rules. Required reading. Live version:
+  ```
+  https://raw.githubusercontent.com/marc-leonti/claude-rules/main/claude_user_rules.md
+  ```
+- `lessons_learned.md` — the cross-project narrative wisdom log. Read before starting any deep investigation. Live version:
+  ```
+  https://raw.githubusercontent.com/marc-leonti/claude-rules/main/lessons_learned.md
+  ```
+
+Those files apply across all of Marc's projects (the Hat Rule, hedging language, treating pushback as data, the wisdom earned in prior projects) and are repo-committed because the iOS Claude Code sandbox does not persist `~/.claude/CLAUDE.md` between sessions. Treat them as load-bearing. They layer on top of the project-specific rules in this file.
+
+If you want the longer reference form (distilled principles + onboarding for newcomers), also read [`getting_started_with_claude.md`](https://raw.githubusercontent.com/marc-leonti/claude-rules/main/getting_started_with_claude.md) from the same repo.
+
+---
+
+## Project-specific rules (fill in below)
+
+<!-- Replace this section with rules specific to THIS project. Examples:
+
+- Required Python version: `py -3.10`
+- Test command: `pytest tests/`
+- Standing rules enforced by hooks in `.claude/settings.json`
+- Branch policy / PR conventions
+- Where to find STATUS.md, lessons_learned.md, design docs
+- Anything else a Claude Code session in this repo needs to know
+
+Delete this comment block when you're done. -->
+
+### Project status
+
+When the user asks **"what's the status?"**, **"what should we work on next?"**, or anything similar, read [`STATUS.md`](STATUS.md) before doing anything else. (Create STATUS.md at the root of this project when you have a non-trivial multi-session arc.)
+
+### Where to look
+
+<!-- Add an inventory of canonical docs as the project grows. Each topic should have exactly one canonical home; this section lists where to find each. -->
