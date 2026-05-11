@@ -60,7 +60,9 @@ But the nulls did real work:
 
 Three null results triangulate to a positive conclusion that no single positive finding could match — because the conclusion doesn't depend on any one search being thorough. Independent failures that all rule out the same family of hypotheses are stronger than a single hit.
 
-> **Sign that this lesson applies:** I'm anxious that an iteration "didn't find anything" and tempted to lower my threshold to surface something. The threshold is correct. The lack of hits is the finding.
+**But calibrate the strength of the negative claim to the search you actually ran.** A null under one methodology is not the same as definitive absence. "X is not on the wire" claims more than "X is not at any single-byte position in frames D4/D9/ED/EF/E8 under encodings A/B/C at EPS=1e-3" — but the second is the actual finding. The shorter form is more memorable and more easily overclaimed. A search-bounded null leaves the door open for the field to appear at a different encoding, in a different frame, at a different threshold, or in a future capture. Marc caught this twice on the FlightScope project: first when "the drift is" got walked back to "the drift could be," then again when "Confirmed not on wire" had to be walked back to "not yet found under these methodologies" for `clubLowPoint`, `postClubNumSpeedPoints`, and others — fields he expected to be on the wire, just not in the search space I'd covered. The same overclaim failure mode applies to negatives that applies to positives; hedge symmetrically.
+
+> **Sign that this lesson applies:** I'm anxious that an iteration "didn't find anything" and tempted to lower my threshold to surface something. The threshold is correct. The lack of hits is the finding — but state the finding as "not found under these encodings/frames/thresholds," not as "not on the wire." If the operator's prior is that a field SHOULD be there, that prior weighs against the null and you should keep the search open under broader methodology.
 
 ---
 
@@ -186,7 +188,7 @@ The reusable insight isn't the threshold — it's the **prompt**: when the curve
 
 ## The previous person's work is tooling
 
-Before this project I'd treated `proxy/session_17/` and `proxy/session_18/` as historical context — interesting reading, but my work was on Session_FSGolf. That was wrong.
+Before this project I'd treated `proxy/SwingSessions/session_17/` and `proxy/SwingSessions/session_18/` as historical context — interesting reading, but my work was on Session_FSGolf. That was wrong.
 
 Three of the most decisive findings in this project came from cross-session leverage:
 
@@ -291,7 +293,7 @@ The same person can switch modes legitimately. If/when CaddieAI ships a coaching
 
 After this lesson was first written, Marc strengthened it into a permanent rule across all our collaboration, not just this project: _"This needs to be a rule committed to permanent memory, applicable anytime we work together, forever. You should ask me what hat you're wearing for a particular project or context if you aren't sure, then stay in your role. There are many hats; coach and scientist are only two."_
 
-The rule lives in user-level `~/.claude/CLAUDE.md` (auto-loaded into every session) and in [`claude_user_rules.md`](claude_user_rules.md) at the repo root (a portable copy for fresh-machine setup). Both are short and direct. The behavior expected of me, every project, every session:
+The rule lives in [`claude_user_rules.md`](claude_user_rules.md) — the canonical home in [marc-leonti/claude-rules](https://github.com/marc-leonti/claude-rules), which every project carries a local copy of in its `claude_rules/` directory. Short and direct. The behavior expected of me, every project, every session:
 
 1. **Ask which hat applies** at the start of any new task, or any time the appropriate mode isn't obvious.
 2. **Stay in role consistently** once a hat is defined, until Marc tells me otherwise.

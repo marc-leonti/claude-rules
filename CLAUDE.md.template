@@ -4,20 +4,24 @@ This file provides guidance to Claude Code when working with code in this reposi
 
 ## Read this first when starting a session
 
-**Cross-project durable rules.** Read [Marc's claude-rules repo](https://github.com/marc-leonti/claude-rules) at the start of every session in this repo. Two files are the priority:
+**Cross-project durable rules.** This project carries a local copy of Marc's [claude-rules](https://github.com/marc-leonti/claude-rules) in the [`claude_rules/`](claude_rules/) directory. Two files are required reading at the start of every session:
 
-- `claude_user_rules.md` — the short durable behavioral rules. Required reading. Live version:
-  ```
-  https://raw.githubusercontent.com/marc-leonti/claude-rules/main/claude_user_rules.md
-  ```
-- `lessons_learned.md` — the cross-project narrative wisdom log. Read before starting any deep investigation. Live version:
-  ```
-  https://raw.githubusercontent.com/marc-leonti/claude-rules/main/lessons_learned.md
-  ```
+- [`claude_rules/claude_user_rules.md`](claude_rules/claude_user_rules.md) — the short durable behavioral rules (the Hat Rule, hedging language, treating pushback as data, etc.).
+- [`claude_rules/lessons_learned.md`](claude_rules/lessons_learned.md) — the cross-project narrative wisdom log. Read before starting any deep investigation.
 
-Those files apply across all of Marc's projects (the Hat Rule, hedging language, treating pushback as data, the wisdom earned in prior projects) and are repo-committed because the iOS Claude Code sandbox does not persist `~/.claude/CLAUDE.md` between sessions. Treat them as load-bearing. They layer on top of the project-specific rules in this file.
+Those rules apply across all of Marc's projects and are committed locally to this repo because the iOS Claude Code sandbox does not persist `~/.claude/CLAUDE.md` between sessions. Treat them as load-bearing. They layer on top of the project-specific rules in this file.
 
-If you want the longer reference form (distilled principles + onboarding for newcomers), also read [`getting_started_with_claude.md`](https://raw.githubusercontent.com/marc-leonti/claude-rules/main/getting_started_with_claude.md) from the same repo.
+If you want the longer reference form (distilled principles + onboarding for newcomers), also read [`claude_rules/getting_started_with_claude.md`](claude_rules/getting_started_with_claude.md).
+
+**If a new lesson is earned during this session**, edit `claude_rules/lessons_learned.md` (or whichever rules file the lesson belongs in). The change stays in this project until Marc syncs it to the canonical [marc-leonti/claude-rules](https://github.com/marc-leonti/claude-rules) repo on his desktop. To check sync status at any time:
+```
+python3 claude_rules/claude_rules_sync.py
+```
+
+If `claude_rules/` is missing from this project (fresh clone, or an older project that hasn't been bootstrapped), run:
+```
+curl -fsSL https://raw.githubusercontent.com/marc-leonti/claude-rules/main/bootstrap.sh | bash
+```
 
 ---
 
@@ -29,7 +33,7 @@ If you want the longer reference form (distilled principles + onboarding for new
 - Test command: `pytest tests/`
 - Standing rules enforced by hooks in `.claude/settings.json`
 - Branch policy / PR conventions
-- Where to find STATUS.md, lessons_learned.md, design docs
+- Where to find STATUS.md, design docs
 - Anything else a Claude Code session in this repo needs to know
 
 Delete this comment block when you're done. -->

@@ -100,11 +100,13 @@ The behavior expected, every project, every session:
 
 This is one of the few cases where the operator may explicitly designate a rule as exempt from the "be careful with absolute rules" meta-principle. The cost of mismatching role and context is asymmetric — every hour of wrong-mode work compounds, while the cost of asking "which hat?" is two seconds. When the operator says "this is a rule," honor it as a rule.
 
-### 4. Null results are not failures
+### 4. Null results are not failures — but calibrate the claim to the search
 
 A search that finds nothing has done real work — it has eliminated a region of hypothesis space. "X is not on the wire" / "the data is not in this file" / "this approach does not converge" are all conclusions, not absences of conclusions. Three independent nulls converging on the same positive inference are sometimes stronger evidence than a single direct hit, because the conclusion doesn't depend on any one search being thorough.
 
 When an iteration produces no new mappings, resist the urge to lower thresholds and search again until something surfaces. Sometimes the right answer is "the threshold was correct; the absence of hits is the finding."
+
+**But state the finding precisely.** A null under one methodology is not the same as definitive absence. "Not found at single-byte positions in frames A/B/C under encoding X at threshold T" is the actual finding; "not on the wire" is an overclaim of that finding. The same hedging discipline that applies to positive claims applies symmetrically to negatives — search-bounded nulls leave the door open for a different encoding, frame, threshold, or capture to surface the field later. If a domain expert's prior is that something should be present, that prior weighs against the null; keep the search open under broader methodology rather than closing it.
 
 ### 5. Tests catch your assumptions, not just your code
 
