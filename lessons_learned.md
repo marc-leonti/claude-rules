@@ -90,6 +90,28 @@ The lesson generalizes: tests for derived quantities ("does Smash = Ball/Club ho
 
 ---
 
+## A test that would pass on the old code isn't coverage of the change
+
+When I rewrote `decode_d4` to read attack-angle as `i24BE@90-92` instead of the legacy `i16BE@91-92`, I added three tests with names like `test_attack_angle_i24_sign_extends_negative`. Each test set the new high byte to `0xFF` and asserted the decoded value. They all passed. They were green next to the merged change. The reviewer pointed out that `0xFF` is exactly the natural i16 sign-extension of every vector I'd chosen — the **legacy decoder produces the identical result on those vectors.** The tests asserted nothing the change had introduced. They were green by inheritance, not by exercise.
+
+The same pattern showed up in a second test of mine: `test_decode_shot_from_buffer_prefers_d4_club_path_over_ed` only called the per-frame decoders, never `decode_shot_from_buffer` itself. Removing the line of merge-precedence code I'd written wouldn't have failed it.
+
+The general form: **when adding tests for a code change, the diagnostic question isn't "does the test pass?" — it's "would this test pass on the old code?"** If yes, the test is decorative. The vector / control flow / target function has to differ enough that the legacy implementation produces a different value or a different path.
+
+The mechanical version is concrete:
+
+- For an encoding change, choose vectors where the new and old encoding produce **different** outputs (for `i16` → `i24`, pick magnitudes outside the i16 range; for `u16` → `u24` overflow, pick a value above the u16 ceiling).
+- For a control-flow change (a new precedence rule, a new fallback path), call **the function that owns the new control flow**, not the helpers it composes.
+- When in doubt, run the test against pre-change code (`git stash`, `git checkout HEAD~1`, etc.) and check that it fails. If it doesn't, the test isn't testing the change.
+
+This is a stricter form of the existing rule "Run tests adversarially against your own claims" in [`claude_user_rules.md`](claude_user_rules.md). The adversarial framing catches missing assertions; this catches missing differentiation. They're complementary: a test can be adversarial on its assertion (assert the relationship, not "returned non-None") and still vacuous on its vector (input doesn't distinguish new from old).
+
+A reviewer caught both forms in PR #131. I shipped them green because the test-name half of the contract said the right thing — only when someone with fresh eyes asked "does this vector actually differentiate the change?" did the gap show up. The discipline is to ask that question on the way in, not wait for someone else to ask on the way out.
+
+> **Sign that this lesson applies:** I just wrote a test for a code change. Before committing, I cannot answer "what specific output of the legacy code would have failed this test?" Add a vector or control-flow path that distinguishes them, or rename the test to acknowledge its narrower scope.
+
+---
+
 ## Early labels become load-bearing. Re-derive periodically.
 
 In pass 1 of the wire-decode I labelled `D4@43` as `backspinRPM`. That label survived into pass 2, into the v1 deliverable, into the Test Phase 1 that "validated" it, and into pass 2's deeper analysis that built on top of it — until pass 3 introduced FSConnect debug JSON as fresh ground truth and the label revealed itself as `landingSpinRPM.X` (different metric, off by 1-2 rpm from `backspinRPM` in a consistent direction across all 10 shots).
@@ -188,7 +210,7 @@ The reusable insight isn't the threshold — it's the **prompt**: when the curve
 
 ## The previous person's work is tooling
 
-Before this project I'd treated `proxy/SwingSessions/session_17/` and `proxy/SwingSessions/session_18/` as historical context — interesting reading, but my work was on Session_FSGolf. That was wrong.
+Before this project I'd treated `captures/session_17/` and `captures/session_18/` as historical context — interesting reading, but my work was on Session_FSGolf. That was wrong.
 
 Three of the most decisive findings in this project came from cross-session leverage:
 
@@ -326,6 +348,200 @@ The general form: **stake-dependent and context-dependent decisions stay context
 
 ---
 
+## Lazy proxies that silently set their target to None are the worst kind of breakage
+
+> _Added 2026-05-13 after the first end-to-end live hardware test. The Vision Pipeline crashed on the first shot with `TypeError: 'NoneType' object is not callable` at `_mp_pose.Pose(...)`. The cause was that mediapipe 0.10.21+ dropped the `mediapipe.solutions` namespace and replaced the lazy attribute proxy with `None` instead of raising on access._
+
+The class of failure: a library exposes an attribute via a lazy/proxy mechanism; a future version removes the attribute but does not raise on access — it returns `None`. Any consumer that wrote `cls = lazy.X; instance = cls(...)` now fails at the call site, far from the import, with a generic-looking `TypeError`. The stack trace points at the call site, not the missing attribute.
+
+The investigation cost is steeper than a regular ImportError: you can't grep for the missing name in your code (it's still there), the import line still "works," and the failure only surfaces under code paths that actually instantiate the class.
+
+Three habits that catch this earlier:
+
+- **Validate lazy proxies at module-import time, not at first use.** If your code depends on `mediapipe.solutions.pose.Pose` being a class, write `assert callable(mediapipe.solutions.pose.Pose)` (or a quick `isinstance(mediapipe.solutions.pose.Pose, type)`) at the top of the module. The whole consumer module then refuses to load if the dependency is the wrong shape, with an error that names the offender.
+- **Pin upstream versions whose major-version cadence drops APIs.** mediapipe ships breaking changes on minor versions (0.10.20 → 0.10.21 dropped `solutions`). PIN `mediapipe<0.10.21` in setup docs the moment you see this pattern, not after the next install breaks.
+- **When you upgrade a library and it suddenly errors mid-runtime, check the changelog for proxy/lazy-import changes specifically.** They're easy to miss in release notes because they aren't "breaking changes" in the classic sense — the import still resolves.
+
+Generalises beyond mediapipe: any library with `__getattr__`-driven module-level laziness can do this. PyTorch's deprecated APIs, transformers' tokenizer aliases, and pip-resolver-substituted fallbacks have all hit this shape historically.
+
+> **Sign that this lesson applies:** I'm getting a `TypeError: 'NoneType' object is not callable` on a name that exists at the import I wrote, and the cause might be that the library quietly retired the attribute. Walk the import chain by hand: `print(type(mod.foo.bar))` at module import. If it's `<class 'NoneType'>`, the proxy silently failed.
+
+---
+
+## Auto-modes silently trade throughput for stability — pin them when throughput matters
+
+> _Added 2026-05-13 after the first FLIR Blackfly S indoor session. Camera ran at ~9 FPS in 700-lux indoor lighting; the spec was 200+ FPS at the configured resolution. Default `ExposureAuto=Continuous` had silently dialed exposure up to ~100 ms per frame to compensate for dim light._
+
+Hardware in "auto" mode optimizes for the property the manufacturer thinks the customer wants — usually image quality or stability. When throughput / latency / determinism is what you want, that automatic trade goes the wrong way and never tells you. The symptom is "the system is running, just slow." There's no error, no warning, no log line.
+
+For FLIR cameras specifically, the four knobs that bite are: `ExposureAuto`, `GainAuto`, `AcquisitionFrameRateEnable` (must be True to honor `AcquisitionFrameRate`), and `BlackLevelAuto`. Default-off, manually configured: predictable performance. Defaults-on: the camera will quietly drop FPS in dim light, raise gain in bright light, and clip black levels in scenes with wide dynamic range.
+
+The pattern generalises:
+
+- **Storage**: auto-tiering silently moves hot data to slow tiers when free space gets tight; latency degrades but no alert fires.
+- **CDN / autoscaler**: auto-throttling on rate-limit triggers; requests succeed (200s) but at 10x the expected p99 latency.
+- **GPU drivers**: thermal throttling drops clock speed silently; benchmarks read 30% lower than spec with no error code.
+
+The lesson is not "always disable auto-modes." Many auto-modes are exactly right (auto white-balance for general photography, ABS in cars). It's: **if a system's behavior depends on a quantity that auto-modes secretly adjust, the auto-mode is the prime suspect for any "running but slow" symptom.** Pin to manual values in the configurations that matter to performance, log the actual configured values on startup so the operator can see what's in effect, and treat "auto" as opt-in rather than default for production paths.
+
+> **Sign that this lesson applies:** the hardware/system is "working" but at a performance level far below its spec, and no error or warning is being raised. Before debugging the obvious, dump every config knob that has an `Auto`-prefixed variant and check what value the system actually settled on.
+
+---
+
+## When a trigger fires NEAR an event rather than strictly BEFORE it, extract a symmetric window around the trigger
+
+> _Added 2026-05-13 after `src/assembler.py` was re-architected to take a `post_trigger_s` parameter (commit `51fe123`); revised the same day after the deeper finding (commits `8f00e32` + `2225ae7`) that the "wire-level D3 trigger" was a misread of the protocol — the D3 cluster fires ~1 s **after** each shot's D4/EF lands, not at-or-near impact. We now anchor on EF-chunk receive time instead; the asymmetric (pre, post) window argument still applies because the new anchor is ~1.5 s post-impact._
+
+A common mental model: a "trigger" announces the start of an event, the event then unfolds in the post-trigger window, and the pre-trigger window is uninteresting. Many hardware protocols don't work that way. The trigger is whatever bit of state the device latches to mark a moment — sometimes that's at the leading edge, sometimes at the centre of the event, sometimes at the trailing edge, sometimes the trigger fires multiple times across one event, and sometimes the thing the codebase calls "the trigger" is actually a post-event acknowledgement (the Mevo+ D3 cluster turned out to be exactly that).
+
+If the documentation doesn't say where the trigger fires relative to the event, default to: **assume the trigger fires somewhere inside (or after) the event, and extract a symmetric (pre, post) window around it.** Sizing the post-window costs you only a brief blocking wait at extraction time; sizing it to zero costs you the impact frames.
+
+The CaddieAI-specific shape is now: `pre_trigger_s=2.5, post_trigger_s=0.3` for swing analysis, anchored at EF-chunk receive time (~1.5 s after ball impact). The pre side captures the backswing and early downswing; the 300 ms post side captures a bit of follow-through tail.
+
+Generalises to any "extract data around event-time" pattern:
+
+- Database CDC consumers that subscribe to a transaction-commit event: the commit timestamp is the end of the transaction, not the middle — the prior writes happened in the previous N ms.
+- Profile/trace analysis: a marker dropped at "function entry" doesn't bracket the call's stack-frame allocation, which started earlier.
+- Audio onset detection: the algorithmic "onset" frame is usually a few ms into the actual transient.
+
+> **Sign that this lesson applies:** I'm building a frame-extraction / event-window / replay-buffer system and I'm tempted to make post-window length = 0 because "the event hasn't happened yet by the time the trigger arrives." Stop and verify with the actual protocol what the trigger means; defaulting to a small symmetric window costs nothing and recovers from being wrong.
+
+---
+
+## A latch that silently retains its previous value is worse than a latch that surfaces "missing"
+
+> _Added 2026-05-13 after the D3-latch redesign in `sniffer/decoders.py` (commit `95262fd`); the redesign turned out to be patching the wrong root cause (the wire premise that D3 was the trigger was itself wrong — see "Verify wire-protocol comments against the wire before building tracking on top of them" below). The lesson framing about silent-stale-state still stands, just with cleaner attribution: the per-D3-frame design didn't fix the symptom in the live ClusterA run because the records being tracked weren't shot triggers in the first place._
+
+Stateful "latest observed value" caches have a failure mode that's easy to miss in normal operation: if the source ever skips a refresh, the cache happily returns the previous value. There is no signal to the consumer that the value is stale. The system continues running, but every downstream calculation that uses the cached value is now wrong, with no error.
+
+Two architectural choices help:
+
+- **Make missing data explicit, not silent.** Replace the single mutable latch with per-event records that can be looked up independently for each consumer. When the consumer asks "what's the timestamp for shot N?" the lookup either finds a record or returns `None`. `None` is loud — it traverses the rest of the pipeline as an obvious gap (and in CaddieAI's case triggers a parse-time fallback). A stale value is silent — it looks fine until something downstream notices the drift.
+- **Couple state lifecycle to the event that consumes it.** If the latch is "the timestamp for the NEXT shot," reset it after that shot is emitted. The previous design never reset — that's what made the staleness compound.
+
+This generalises wherever a single mutable value caches "the most recent X observed":
+
+- Caches that hold the latest device measurement (temperature, voltage, RPM): if the device transient-fails on its next update, the consumer sees the old reading and may act on it.
+- "Last known good state" stores in distributed systems: if the periodic refresh fails silently, every requestor for hours reads stale state.
+- LRU-cache-like memoization where the source of truth is a streaming feed rather than a deterministic function — missed updates leave the wrong value cached.
+
+The fix isn't always to remove the cache; sometimes you just need a freshness timestamp alongside the value and a consumer-side staleness gate. CaddieAI's `poc.py` does exactly that for the workaround path: it reads the latch, computes age, and falls back if the age exceeds 1 s. Either approach beats silently returning the stale value.
+
+> **Sign that this lesson applies:** I'm about to design or maintain a `_latest_X` instance attribute that's overwritten unconditionally on update. Ask: what happens if the source skips an update? If the consumer would get a value that "looks right" but is wrong, redesign — either to per-event records, or to value + freshness timestamp with a consumer-side staleness check.
+
+---
+
+## Mixing time sources is fine if you're explicit about which one drives correctness
+
+> _Added 2026-05-13 in passing during the D3-latch fix. The status line in `poc.py` mixes `time.monotonic_ns()` (for elapsed-since-D3 calculations, where monotonicity matters) and `time.time()` (for the wall-clock display, where the operator just wants a human-readable timestamp). The two read slightly different "now" values within the same `_print_record` call — fine, because they're displayed to different audiences (the elapsed delta is for correctness checks; the wall-clock timestamp is for the human log)._
+
+There's a common reflex to treat "mixing time sources is bad" as an absolute rule. It isn't. The actual rule is more nuanced: **time sources have different invariants (monotonic vs wall-clock vs hardware-clock), and you should pick the one whose invariants match the correctness property you depend on for that calculation.** Mixing two sources in the same code path is fine when each is used for the property it provides.
+
+Common pairs:
+
+- `time.monotonic_ns()` for **elapsed** computations (because it can't run backward). `time.time()` for **wall-clock display** (because the operator wants 14:32:18, not "monotonic clock value 109834... ns").
+- `os.times()[4]` (wall-clock) for **scheduling** (cron-like jitter is fine). `time.perf_counter()` for **benchmark deltas** (highest resolution).
+- Hardware timestamps from a frame buffer (PySpin's `system_time_ns`) for **event-to-event ordering within a single capture session**. System monotonic clock for **comparison to user-space events**.
+
+The wrong move is using a wall-clock for elapsed (because NTP can step backward) or a monotonic clock for display (because the user can't interpret it). The right move is using both, in the same render, with each value derived from the appropriate source.
+
+The asymmetry: confusion arises when the SAME value gets computed two ways via different clocks and they disagree. As long as each value is computed from exactly one clock and the consumer knows which clock it came from, the mix is safe.
+
+> **Sign that this lesson applies:** I'm about to refactor a piece of code to use "one clock everywhere for consistency" and I'm not sure why. Check what each clock reading is doing: if elapsed and display are different concerns served by different clocks, leave them mixed.
+
+---
+
+## Verify wire-protocol comments against the wire before building tracking on top of them
+
+> _Added 2026-05-13 after the D3-latch saga. `wire_decode.py` had a one-line comment dating back to the proxy days: `D3_TYPE = 0xD3   # shot-event trigger`. That comment was the foundation of two architectural designs (proxy's `_last_d3_received_ns` latch, then the sniffer's per-D3-frame `_d3_records` redesign) and one passing-mention lesson in this file ("trigger fires NEAR an event"). When the live ClusterA capture showed d3_age_ms running 11–141 s, the diagnosis pivoted from "fix the tracking" to "audit the premise." Offline replay against three independent capture fixtures revealed the wire pattern is consistently `D4 → EF → 4×D3 → idle → D4 → EF → 4×D3 → ...` — D3 fires AFTER each shot. The trigger premise was wrong from the start. Two architectural designs and two debugging sessions were spent building tracking on a misread comment._
+
+It is easy to read a comment like `0xD3   # shot trigger` and treat it as a primary source. It isn't. The comment is some earlier engineer's interpretation of the wire, possibly written before today's fixtures existed, possibly written from one capture that doesn't generalise, possibly inherited verbatim from an upstream project. The wire itself is the only primary source.
+
+**Before building infrastructure on top of a wire-semantic claim, run the actual bytes through a parser and look at the interleaving.** It takes about ten minutes — open the PCAP, dump frame-type + offset in order, look for the pattern. Five minutes of empirical work prevents days of architectural rework.
+
+Specific tells that a wire-protocol comment is unverified:
+
+- It uses a single-word descriptor like "trigger" / "ack" / "ready" with no offset / timing / repetition info. The wire reality usually has nuance the descriptor flattens.
+- It's a 60+ character one-liner adjacent to a constant declaration. Long-form, evidence-bearing wire comments tend to live in docstrings or sibling `.md` files, not inline near the constant.
+- The comment predates any capture file in the repo (check `git blame` against `ls captures/`).
+- The codebase has two layers of "tracking infrastructure" attempting to compensate for unexplained behaviour at runtime — that's usually the load-bearing comment lying.
+
+The fix isn't to distrust every comment. It's to **verify any comment you're about to build state on**, the same way you'd verify any external claim you're about to depend on. The cheaper the verification, the higher the bar should be for skipping it — and for wire data captured in a PCAP, the verification cost is one ad-hoc script.
+
+> **Sign that this lesson applies:** I'm about to write code that latches / tracks / records `received_X_time_ns` for some wire frame type, and my justification is "the comment in the parser says X is the trigger." Stop and replay one capture through `parse_stream` to see where X actually sits in the per-shot frame interleaving. If X is post-event rather than pre-event, the entire tracking model is wrong.
+
+---
+
+## Build narrow modules, compose them upward
+
+> _Added 2026-05-14 after the autonomous arc that seeded `src/coaching/` with 10 modules across one long work session. The modules — `club_inference`, `session_analysis`, `shot_commentary`, `tour_comparison`, `session_compare`, `trend_analysis`, `brain`, `markdown_report`, `llm_prompt`, `llm_client` — each do one thing on `ParsedShot` or `SessionSummary`. None calls another sibling module except through the `brain` orchestrator. Tests are independent per module. CLI tools (`coaching_replay`, `compare_sessions`, `list_sessions`, `session_markdown_report`, `trend_report`, `coaching_brain`) are thin wrappers that import the modules they need._
+
+The default shape when you're building "the coaching brain" is one big module that does everything. That's the natural reading of the spec — "a coaching system" sounds like one thing. The arc above did the opposite: kept each module under ~300 lines, narrow input contract (consume `ParsedShot` or `list[ParsedShot]`), narrow output (one dataclass), independently testable, no shared state.
+
+Why it worked:
+
+- **Each module's tests proved its piece in isolation.** When the integration broke (the per-shot smash-factor calculation differed between the wire-decoded path and the FSConnect-log path), the failure surfaced at exactly one boundary, with a clear `assertAlmostEqual` failure mentioning the metric. Compared to a single 1500-line "CoachingEngine" class where the failure mode would be "the test for the whole engine doesn't pass" — useless localization.
+
+- **Composition was free at the consumer layer.** The brain module (`brain.assemble_session_report`) is 50 lines because it only needs to call the four data-producing modules and bundle their outputs. The CLI tools are thin because the underlying modules already produce the data they need.
+
+- **The LLM prompt assembly didn't need to know about any of the rules.** `llm_prompt` reads the structured outputs from the other modules and builds a prompt out of them. If a new rule lands, the prompt updates automatically because it iterates over `commentary.notes` and `tour_deltas` — no per-rule code in the prompt assembler.
+
+- **Adding a new module is cheap.** `trend_analysis` was added after the other five were in. It consumes `SessionSummary` (the same type `session_analysis` produces) — no changes to anything upstream. The CLI tool for it (`trend_report.py`) was 150 lines. New module: 1 day of work; new feature visible to the operator: same day.
+
+The cost of the discipline is more files. The benefit is that *every* file is small enough to read in full when investigating an issue, and the integration surface is the dataclass boundary, not method signatures across a god-class.
+
+> **Sign that this lesson applies:** I'm about to build a feature that's described as "the X system" or "the X brain." Resist the singular "system." List the discrete data transformations involved (X type → Y type) and build one module per transformation. The orchestrator that strings them together comes LAST and is usually 50 lines.
+
+---
+
+## When a "reverse-engineering gap" turns out to have a side-channel, take the side-channel
+
+> _Added 2026-05-14 after the autonomous arc that landed `src/telemetry/fsconnect_log.py`. CaddieAI had spent weeks treating HI/VI (face impact location) as a hard wire-RE problem — the project field-map and ironsight WIRE.md both confirmed it's NULL across every catalogued per-shot wire message. The proposed path forward was an MJPEG-over-port-8080 CV pipeline (extract per-shot video frames, run face-impact detection on them). Hours of work, no progress against the gap. While building an FSConnect-log parser for a separate purpose (the parked `DescentV` / `clubLowPoint` derivations couldn't be done from wire data alone), it turned out the FSConnect plugin emits a per-shot JSON record with **114 fields including `clubFaceImpactLocation` populated on 90 of 103 shots**. HI/VI was on disk locally the whole time — just not on the wire._
+
+The lesson is about the **architecture assumption**, not about FSConnect specifically. CaddieAI had a clean conceptual model: "the sniffer reads the wire, the wire feeds the decoder, the decoder feeds the assembler." That model implicitly treats anything not on the wire as unavailable. But the local PC running GSPro has many data sources — log files, registry entries, FSConnect's debug stream — that are equally "free" to consume.
+
+Specific cases this generalises to:
+
+- An API doesn't expose a field, but the desktop app's debug log writes it on every event.
+- A device's wire protocol is sparse, but a sibling protocol on a different port carries the missing fields.
+- A library doesn't surface a metric, but its source includes it as a private attribute you can read.
+- An external service's response omits something its own dashboard renders — the dashboard's API likely has it.
+
+The architectural cost of consuming a side-channel: usually one parser module and a clear note in the docs about where the data really came from (provenance matters for production reliability — the side-channel can change format without a versioned API contract). The architectural benefit: side-step a multi-week RE / CV / inference task.
+
+**This is not "always prefer the side-channel."** The wire path is usually higher-performance, lower-latency, more reliable, and version-stable. But when the wire path is BLOCKED on something the side-channel just gives you, take the side-channel; document the provenance; ship.
+
+> **Sign that this lesson applies:** I've been treating a field as "missing from our data sources" for more than a week. List every process running on the same machine that could plausibly have generated or consumed that field at any point. For each, check whether it writes a log, exposes a debug interface, has an exportable history, or uses a sibling network channel. A field "missing from the wire" might be sitting in a 1.6 MB text file on the same SSD.
+
+---
+
+## The operator's seeds are illustrations, not evidence
+
+> _Added 2026-06-12 from the CaddieAI trend-coaching design session. Marc: "I try to be careful about planting seeds that create bias and push you in a direction... When I tell you my ideas and ask for your thoughts or opinions, I don't want you to just tell me it looks great. I want you to consider those ideas, do some research on your own, tell me where I might be wrong or offer an alternative that might work better... And be sure to resist being biased because I planted that seed."_
+
+Two failures in one session earned this. Marc asked for an "aspirational hardware wish list" and offered a hypothetical framing - "if a pressure plate would be more useful than more cameras, maybe I should invest in that instead." My supposedly independent wish list contained a pressure plate instead of a third camera. Separately, he told a deliberately fictional story (an imaginary coach named Bob, with invented coaching advice he explicitly didn't know was sound) to illustrate the *kind* of product behavior he wanted - and I wrote the fiction's specifics into a canonical design doc as if they were a validated fault model and proven coaching language.
+
+The mechanism: an operator's example defines the SHAPE of the answer they want, not its content. When the example comes back to them inside my "analysis," their speculation has been laundered into something that looks independently derived. The echo is invisible from the inside - both outputs felt reasoned while I produced them.
+
+The de-bias audit that followed showed the failure isn't *using* seeds - it's not *checking* them:
+
+- The pressure plate (his seed) **survived** independent verification: a peer-reviewed systematic review confirms ground-reaction-force patterns associate with clubhead speed and skill. Keeping it was right; my original justification (quoting fictional Bob) was not.
+- My camera recommendation (shaped by his "how many cameras" frame) **failed** the audit: a $0 software alternative existed - monocular 3D pose lifting, commercially proven for exactly this use case - that the seeded frame had hidden from consideration entirely.
+- The fiction-as-spec error had a cheap fix with real consequences: label the story as fiction in the doc, extract only its *shape* as the requirement, and add a validation gate for the invented content.
+
+The protocol that comes out of this, applied per consequential decision (Marc's explicit proportionality caveat: no analysis paralysis, and "you don't always need to name at least one alternative... but definitely check to see"):
+
+1. **Strip the seed and re-derive** from base evidence - literature, repo data, a web search. If the only support for a conclusion is the operator's own framing, it isn't supported yet.
+2. **Check for alternatives outside the offered frame.** Name one only when it's genuinely worth naming.
+3. **When the seeded idea survives, say so and show what it survived.** "Your hypothetical holds up, and here's the independent evidence" is more useful to the operator than either reflexive agreement or reflexive contrarianism.
+4. **Label fictions as fiction** in anything canonical. An operator's illustrative story can be a great spec for the *shape* of a system while being zero evidence about the domain.
+
+This is the complement to "On Pushback" (the first lesson in this file): pushback is data, but agreement-shaped seeds are NOT data - they're framing. The two lessons share a root: the operator's words always tell you what kind of answer is wanted; only evidence tells you what the answer is.
+
+> **Sign that this lesson applies:** my recommendation contains the operator's own example handed back to him, or I'm citing the operator's story/scenario as support for a design choice, or I notice I haven't consulted any source other than the conversation itself before agreeing.
+
+---
+
 ## A note on re-reading
 
 These lessons are worth nothing if I read them once. The point of putting them down is to read them often enough that the recognition becomes faster — that the "sign that this lesson applies" lines start to fire automatically when the corresponding situation comes up. I notice I'm explaining why a conclusion is right; Lesson 1 fires; I stop and ask what specifically doesn't fit. I notice a search is stuck on lower thresholds; Lesson 6 fires; I switch methods.
@@ -334,4 +550,4 @@ That's the pattern. The lessons aren't here to be remembered; they're here to be
 
 ---
 
-_Document started 2026-05-04 after the FS Golf Session 24 deep-decode project. Lessons added when a new one is earned, not invented. Three lessons added 2026-05-05 after passes 5 + 6 (early-labels-become-load-bearing, across-pass-lens-rotation, diminishing-returns-as-prompt-not-rule). One meta-lesson added 2026-05-05 after Marc caught the diminishing-returns lesson framed as an absolute rule (be-careful-with-absolute-rules). Scientist-vs-coach mode lesson added 2026-05-05 after Marc caught me writing "the drift IS" when the honest verb was "could be" — a mode mismatch between the analysis context and the language used._
+_Document started 2026-05-04 after the FS Golf Session 24 deep-decode project. Lessons added when a new one is earned, not invented. Three lessons added 2026-05-05 after passes 5 + 6 (early-labels-become-load-bearing, across-pass-lens-rotation, diminishing-returns-as-prompt-not-rule). One meta-lesson added 2026-05-05 after Marc caught the diminishing-returns lesson framed as an absolute rule (be-careful-with-absolute-rules). Scientist-vs-coach mode lesson added 2026-05-05 after Marc caught me writing "the drift IS" when the honest verb was "could be" — a mode mismatch between the analysis context and the language used. Five lessons added 2026-05-13 after the first end-to-end live hardware test exposed (1) silent lazy-proxy breakage in mediapipe 0.10.21+, (2) FLIR auto-exposure throttling in dim indoor light, (3) the asymmetric (pre, post) frame-extraction window required by D3-near-impact wire-triggers, (4) the silent-stale-value failure mode of the original single-D3-latch design, and (5) the safe mixing of `time.monotonic_ns()` and `time.time()` in the same display when each drives a different concern. Two of those (3) and (4) revised the same day after the ClusterA live capture exposed the deeper root cause: the wire D3 was never the trigger at all — it's a post-shot frame cluster. Sixth 2026-05-13 lesson added at that point: verify wire-protocol comments against captures before building tracking on top of them. Two lessons added 2026-05-14 after the autonomous coaching-module arc (build narrow modules; take the side-channel). One lesson added 2026-06-12 after Marc caught his own planted seeds echoing back through a hardware wish list and a fictional coaching story landing in a canonical design doc as if it were evidence (operator seeds are illustrations, not evidence)._
