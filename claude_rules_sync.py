@@ -36,6 +36,12 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
+# Windows consoles default to cp1252; the rule files are full of
+# em-dashes and arrows, so printing a diff crashes without this shim
+# (the CaddieAI CLAUDE.md UTF-8 rule, applied to this script itself).
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 REPO_OWNER = "marc-leonti"
 REPO_NAME = "claude-rules"
 BRANCH = "main"
@@ -56,9 +62,14 @@ def fetch_live(filename: str) -> tuple[str | None, str]:
     """Return (content, status_label). content is None if fetch failed."""
     url = f"https://raw.githubusercontent.com/{REPO_OWNER}/{REPO_NAME}/{BRANCH}/{filename}"
     try:
+        # encoding= is load-bearing on Windows: text=True alone decodes
+        # curl's UTF-8 bytes as cp1252, turning every em-dash/arrow in
+        # the live files into mojibake - which made ALL tracked files
+        # read as "diverged" even when byte-identical (2026-06-12).
         result = subprocess.run(
             ["curl", "-sS", "-L", "-w", "\n%{http_code}", url],
             capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace",
         )
     except subprocess.TimeoutExpired:
         return None, "timeout"
